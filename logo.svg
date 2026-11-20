@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Boîte à Outils Superviseur">
+  <!-- Tuile arrondie (fond midnight du thème) -->
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="#002032"/>
+  <!-- Filet intérieur seafoam discret -->
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="11.5" fill="none" stroke="#25E2CC" stroke-opacity="0.25" stroke-width="1.5"/>
+  <!-- Trois barres ascendantes (pilotage) qui sortent de la boîte -->
+  <rect x="16" y="29" width="8" height="14" rx="2" fill="#7CEEE0"/>
+  <rect x="28" y="19.5" width="8" height="23.5" rx="2" fill="#25E2CC"/>
+  <rect x="40" y="10.5" width="8" height="32.5" rx="2" fill="#FBCA18"/>
+  <!-- Boîte à outils (corps seafoam) -->
+  <rect x="10" y="43" width="44" height="11" rx="3.5" fill="#25E2CC"/>
+  <!-- Fermoir central + rivets (découpes midnight) -->
+  <rect x="28.5" y="43" width="7" height="6" rx="1.5" fill="#002032"/>
+  <circle cx="14.5" cy="48.5" r="1.3" fill="#002032" fill-opacity="0.5"/>
+  <circle cx="49.5" cy="48.5" r="1.3" fill="#002032" fill-opacity="0.5"/>
+</svg>
