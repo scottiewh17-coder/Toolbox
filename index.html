@@ -570,6 +570,89 @@ details.pl-import[open] summary::before { content: "–"; }
   border-radius: 8px; font-size: 12.5px; font-family: inherit; background: var(--white); color: var(--charcoal); }
 .msel-search:focus { outline: none; border-color: var(--jade); }
 
+/* ============================================================
+   Micro-interactions — effet de clic (ripple), pression au clic,
+   survols animés, infobulle qui suit le curseur et animation
+   d'entrée de page. Désactivées si le système demande des
+   animations réduites (prefers-reduced-motion).
+   ============================================================ */
+/* Conteneurs compatibles ripple (le disque est ajouté en JS au pointerdown) */
+.btn, .icon-btn, .mini-btn, .nav-item, .nav-group-head, .msel-btn,
+.btn-zoom, .zoom-close, .dash-reset, .msel-all, .msel-opt, .pl-x, .welcome-card {
+  position: relative; overflow: hidden;
+}
+.ripple {
+  position: absolute; border-radius: 50%; background: currentColor;
+  opacity: .22; pointer-events: none; transform: scale(0);
+  animation: boRipple .45s ease-out forwards;
+}
+@keyframes boRipple { to { transform: scale(1); opacity: 0; } }
+
+/* Pression au clic : l'élément s'enfonce légèrement */
+.btn, .icon-btn, .mini-btn, .msel-btn, .btn-zoom, .zoom-close, .dash-reset,
+.nav-item, .nav-group-head, .welcome-card, .gauge-card, .pl-x {
+  transition: transform .12s ease, box-shadow .18s ease, background-color .15s ease,
+    border-color .15s ease, color .15s ease;
+}
+.btn:active, .icon-btn:active, .mini-btn:active, .msel-btn:active,
+.btn-zoom:active, .zoom-close:active, .dash-reset:active,
+.nav-item:active, .nav-group-head:active { transform: scale(.96); }
+.pl-x:active { transform: scale(.88); }
+
+/* Survol des boutons : légère élévation */
+.btn-primary:hover, .btn-ghost:hover, .btn-danger:hover {
+  transform: translateY(-1px); box-shadow: 0 3px 10px rgba(0, 32, 50, .16);
+}
+.btn-primary:active, .btn-ghost:active, .btn-danger:active {
+  transform: scale(.97); box-shadow: none;
+}
+.btn-zoom:hover, .zoom-close:hover, .mini-btn:hover { transform: scale(1.08); }
+.msel-btn:hover { border-color: var(--jade); box-shadow: 0 2px 8px rgba(0, 32, 50, .10); transform: translateY(-1px); }
+.msel-btn:active { transform: scale(.97); }
+
+/* Cartes-tuiles (jauge KPI, cartes d'activité) : élévation au survol */
+.gauge-card:hover, .act-card:hover {
+  transform: translateY(-2px); border-color: var(--seafoam);
+  box-shadow: 0 6px 16px rgba(0, 32, 50, .12);
+}
+.card { transition: border-color .18s ease, box-shadow .18s ease; }
+.card:hover { border-color: #cfdde6; box-shadow: 0 2px 8px rgba(0, 32, 50, .10); }
+
+/* Tableaux et menus déroulants : réaction douce */
+tbody tr { transition: background-color .12s ease; }
+.msel-opt, .msel-all { transition: background-color .12s ease; }
+
+/* Clavier : anneau de focus visible et cohérent */
+.nav-item:focus-visible, .nav-group-head:focus-visible, .btn:focus-visible,
+.icon-btn:focus-visible, .mini-btn:focus-visible, .msel-btn:focus-visible,
+.dash-reset:focus-visible, .msel-opt:focus-visible {
+  outline: 2px solid var(--seafoam); outline-offset: 1px;
+}
+
+/* Animation d'entrée de page (relancée à chaque navigation) */
+@keyframes boPageIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+.main.page-in { animation: boPageIn .26s ease; }
+
+/* Infobulle qui suit le curseur (élément .cursor-tip créé par core.js) */
+.cursor-tip {
+  position: fixed; left: 0; top: 0; z-index: 100; max-width: 280px;
+  background: var(--midnight); color: var(--seafoam);
+  font-size: 12.5px; font-weight: 600; line-height: 1.35;
+  padding: 7px 11px; border-radius: 9px;
+  box-shadow: 0 6px 18px rgba(0, 32, 50, .3);
+  pointer-events: none; white-space: normal;
+}
+.cursor-tip[hidden] { display: none; }
+@keyframes boTipIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.cursor-tip:not([hidden]) { animation: boTipIn .15s ease; }
+
+/* Accessibilité : on respecte la préférence « animations réduites » */
+@media (prefers-reduced-motion: reduce) {
+  .ripple { display: none; }
+  .main.page-in, .cursor-tip:not([hidden]) { animation: none; }
+  * { transition-duration: .01ms !important; }
+}
+
 </style>
 </head>
 <body>
@@ -908,6 +991,85 @@ function toast(msg) {
   toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2600);
 }
 
+/* ---------- Micro-interactions ----------
+   Infobulle qui suit le curseur (attribut data-tip ; les attributs title
+   existants sont convertis au rendu pour éviter le double affichage natif)
+   et effet de pression au clic (ripple) sur les éléments interactifs. */
+let tipEl = null, tipTarget = null;
+function tipMove(e) {
+  if (!tipEl || tipEl.hidden) return;
+  const pad = 14;
+  const w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+  let x = e.clientX + pad, y = e.clientY + 18;
+  if (x + w > window.innerWidth - 8) x = Math.max(8, e.clientX - w - pad);
+  if (y + h > window.innerHeight - 8) y = Math.max(8, e.clientY - h - 12);
+  tipEl.style.left = x + "px";
+  tipEl.style.top = y + "px";
+}
+function tipHide() {
+  if (tipEl) tipEl.hidden = true;
+  tipTarget = null;
+}
+function tipShowFor(target, e) {
+  const text = target.getAttribute("data-tip");
+  if (!text) return;
+  if (!tipEl) {
+    tipEl = document.createElement("div");
+    tipEl.className = "cursor-tip";
+    tipEl.setAttribute("role", "tooltip");
+    tipEl.hidden = true;
+    document.body.appendChild(tipEl);
+  }
+  tipEl.textContent = text;
+  tipEl.hidden = false;
+  tipTarget = target;
+  tipMove(e);
+}
+function initCursorTip() {
+  document.addEventListener("pointerover", function (e) {
+    if (e.pointerType === "touch") return;
+    const t = e.target && e.target.closest ? e.target.closest("[data-tip]") : null;
+    if (t) { tipTarget = t; tipShowFor(t, e); } else { tipHide(); }
+  });
+  document.addEventListener("pointermove", function (e) {
+    if (e.pointerType === "touch") return;
+    if (tipTarget && tipEl && !tipEl.hidden) tipMove(e);
+  });
+  document.addEventListener("pointerout", function (e) {
+    if (!e.relatedTarget) tipHide();
+  });
+  document.addEventListener("pointerdown", tipHide, true);
+  window.addEventListener("blur", tipHide);
+  document.addEventListener("scroll", tipHide, true);
+}
+/* Convertit les attributs title en data-tip au fil des rendus. */
+function syncTitleTips() {
+  $all("[title]").forEach(function (el) {
+    const t = el.getAttribute("title");
+    el.removeAttribute("title");
+    if (!el.hasAttribute("data-tip")) el.setAttribute("data-tip", t);
+  });
+}
+function initRipple() {
+  const SEL = ".btn, .icon-btn, .mini-btn, .nav-item, .nav-group-head, .msel-btn, " +
+    ".btn-zoom, .zoom-close, .dash-reset, .msel-all, .msel-opt, .pl-x, .welcome-card";
+  document.addEventListener("pointerdown", function (e) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const el = e.target && e.target.closest ? e.target.closest(SEL) : null;
+    if (!el || el.disabled) return;
+    const rect = el.getBoundingClientRect();
+    const d = Math.max(rect.width, rect.height) * 2.2;
+    const s = document.createElement("span");
+    s.className = "ripple";
+    s.style.width = s.style.height = d + "px";
+    s.style.left = (e.clientX - rect.left - d / 2) + "px";
+    s.style.top = (e.clientY - rect.top - d / 2) + "px";
+    el.appendChild(s);
+    s.addEventListener("animationend", function () { s.remove(); });
+    setTimeout(function () { if (s.parentNode) s.remove(); }, 800);
+  });
+}
+
 /* ---------- Menu de navigation ----------
    La Scorecard, commune aux 4 projets, est placée juste sous « Tableau de bord »
    dès qu'un projet est sélectionné (son contenu change selon le projet).
@@ -977,8 +1139,30 @@ const MENU = [
   }
 ];
 
+/* Descriptions courtes affichées dans l'infobulle au survol des pages du menu. */
+const PAGE_TIPS = {
+  accueil: "Choisir le projet à ouvrir",
+  dashboard: "Vue interactive alimentée par vos lignes Update_perf : filtres à choix multiple, tout se recalcule aussitôt",
+  scorecard: "Scorecard du projet : KPI, DMT & SATCLI par agent et graphiques",
+  "update-perf": "Consultez les lignes Update_perf du projet, export CSV disponible",
+  "perf-projet": "Performance par projet (module en construction)",
+  "perf-cc": "Performance par chargé de clientèle (module en construction)",
+  prime: "Suivi des primes (module en construction)",
+  ca: "Chiffre d'affaires (module en construction)",
+  accompagnement: "Suivi accompagnement (module en construction)",
+  "stych-alim": "L'unique porte d'entrée des imports, adaptée au projet sélectionné",
+  "config-fdr": "Effectifs et objectifs de travail par flux et par mois",
+  heures: "Saisie et suivi de vos heures",
+  planning: "Planning des semaines chargées depuis le fichier « Validation Planning »",
+  conges: "Congés et absences de l'équipe",
+  equipe: "Référentiel de l'équipe : agents et matricules",
+  donnees: "Export / import JSON et réinitialisation des données",
+  analyse: "Analyse du taux de joignabilité Stych : contacts, créneaux, raisons, secteurs"
+};
+
 function navItem(id, label, icon, active) {
-  return '<li><a class="nav-item' + (active ? " active" : "") + '" data-id="' + id + '" href="#/' + id + '">' +
+  return '<li><a class="nav-item' + (active ? " active" : "") + '" data-id="' + id + '" data-tip="' +
+    esc(PAGE_TIPS[id] || label) + '" href="#/' + id + '">' +
     ic(icon, 17) + "<span>" + esc(label) + "</span></a></li>";
 }
 
@@ -991,7 +1175,8 @@ function renderSidebar(activeId) {
     } else {
       const hasActive = item.children.some(function (c) { return c.id === activeId; });
       html += '<li class="nav-group' + (hasActive ? " open" : "") + '">';
-      html += '<button class="nav-group-head" type="button">' + ic(item.icon, 16) + "<span>" + esc(item.group) + "</span>" +
+      html += '<button class="nav-group-head" type="button" data-tip="Groupe « ' + esc(item.group) +
+        ' » — cliquer pour déplier ou replier">' + ic(item.icon, 16) + "<span>" + esc(item.group) + "</span>" +
         '<span class="chev">' + ic("chevron", 14) + "</span></button>";
       html += '<ul class="nav-sub">';
       item.children.forEach(function (c) {
@@ -1036,7 +1221,13 @@ function navigate() {
   if (sel && sel.value !== store.data.activityId) sel.value = store.data.activityId;
   const main = $("#main");
   const fn = ROUTES[id];
+  tipHide();
   if (fn) { fn(main); } else { ROUTES["dashboard"](main); }
+  syncTitleTips();
+  /* Animation d'entrée de la page (relancée à chaque navigation). */
+  main.classList.remove("page-in");
+  void main.offsetWidth;
+  main.classList.add("page-in");
   window.scrollTo(0, 0);
 }
 
@@ -1052,6 +1243,10 @@ function buildHeader() {
     navigate();
   });
   $("#btnMenu").innerHTML = ic("menu", 22);
+  $("#btnMenu").setAttribute("data-tip", "Ouvrir ou fermer le menu");
+  const brand = $(".brand");
+  if (brand) brand.setAttribute("data-tip", "Revenir à l'accueil et changer de projet");
+  sel.setAttribute("data-tip", "Changer d'activité : le contenu des pages s'adapte au projet");
   $("#btnMenu").addEventListener("click", function () {
     document.body.classList.toggle("sidebar-open");
   });
@@ -1067,6 +1262,8 @@ function buildHeader() {
 function boot() {
   store.load();
   buildHeader();
+  initCursorTip();
+  initRipple();
   window.addEventListener("hashchange", navigate);
   navigate();
 }
