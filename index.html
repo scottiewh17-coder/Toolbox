@@ -5586,9 +5586,10 @@ async function syncState() {
   try {
     const r = await fetch("/api/state", { headers: syncHeaders() });
     const ct = r.headers.get("content-type") || "";
-    if (!r.ok || ct.indexOf("application/json") < 0) return { ok: false, status: r.status };
-    const j = await r.json();
-    if (j.ok === false) return { ok: false, status: r.status, error: j.error || "erreur serveur" };
+    if (ct.indexOf("application/json") < 0) return { ok: false, status: r.status };
+    const j = await r.json().catch(function () { return null; });
+    if (!j) return { ok: false, status: r.status };
+    if (!r.ok || j.ok === false) return { ok: false, status: r.status, error: j.error || "erreur serveur" };
     return Object.assign({ ok: true }, j);
   } catch (e) {
     return { ok: false, status: 0 };
@@ -5687,11 +5688,18 @@ async function syncRefreshCard() {
   const ki = $("#syncKeyInput");
   if (ki) ki.value = syncApiKey();
   if (!st.ok) {
+    if (st.status === 401 || st.error === "unauthorized") {
+      el.innerHTML = "<b>En ligne et protégée par mot de passe.</b> L'API répond : le déploiement est bon et le mot de " +
+        "passe (APP_KEY) est actif dans Cloudflare. Saisissez-le dans le champ ci-dessous puis cliquez « Tester » : " +
+        "la carte passera à « Connectée », ou à « Presque installée » si la liaison D1 (étape 2 du guide) manque encore.";
+      if (actions) actions.style.display = "";
+      return;
+    }
     if (st.error && st.error.indexOf("D1") >= 0) {
       el.innerHTML = "<b>Presque installée.</b> L'API répond, mais la base de données D1 n'est pas encore reliée au site. " +
         "Dans Cloudflare : Workers & Pages → toolbox-bv0 → Settings → Bindings → ajoutez une liaison D1 nommée exactement " +
         "<b>DB</b> (choisissez la base créée via le guide), puis créez un nouveau déploiement pour l'activer. " +
-        "Détails pas à pas : guide <b>DEPLOY-D1.md</b>, étapes 3 et 5.";
+        "Détails pas à pas : guide <b>DEPLOY-D1.md</b>, étapes 2 et 4.";
       if (actions) actions.style.display = "none";
       return;
     }
