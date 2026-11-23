@@ -881,7 +881,8 @@ const store = {
   seed() {
     const entries = window.APP_HISTORY.map(function (row, i) { return { id: "h" + (i + 1), row: row.slice() }; });
     this.data = { activityId: DATA.activities[0].id, entries: entries, fdr: this.seedFdr(),
-      dmt: { matricules: {}, agg: {}, imports: [] } };
+      dmt: { matricules: {}, agg: {}, imports: [] },
+      satcli: { vals: {}, dates: {} }, joign: { agg: {}, imports: [], total: 0 } };
     entries.forEach(function (e) { completeRow(e.row); });
   },
   load() {
@@ -923,6 +924,7 @@ const store = {
     this.save();
   },
   save() {
+    this.data.savedAt = new Date().toISOString();
     try { localStorage.setItem(this.KEY, JSON.stringify(this.data)); }
     catch (e) { toast("Attention : enregistrement local impossible (mode privé ?)"); }
   },
@@ -1266,6 +1268,7 @@ function boot() {
   initRipple();
   window.addEventListener("hashchange", navigate);
   navigate();
+  fsAutoScan();                 /* scan du dossier lié au démarrage (silencieux si rien de nouveau) */
 }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", boot);
@@ -2107,32 +2110,75 @@ function renderTeamTable() {
    DONNÉES & SAUVEGARDE
    ============================================================ */
 function renderDonnees(root) {
+  const nbSatcli = Object.keys((store.data.satcli || {}).vals || {}).length;
+  const joignTotal = (store.data.joign || {}).total || 0;
+  const savedAt = store.data.savedAt ? new Date(store.data.savedAt) : null;
   root.innerHTML = pageHead("Données & sauvegarde",
-    "Vos données sont enregistrées dans ce navigateur, sur cet ordinateur. Exportez régulièrement une sauvegarde.") +
-    '<div class="card"><h2>' + ic("download", 16) + " Exporter</h2>" +
-    '<p class="card-sub">Le fichier de sauvegarde JSON contient tout : saisies Update_perf, config FDR et activité sélectionnée. Conservez-le précieusement (clé USB, dossier daté...).</p>' +
+    "Tout ce que vous importez est enregistré automatiquement, aussitôt saisi — dans ce navigateur, sur cet ordinateur. Exportez régulièrement une sauvegarde complète.") +
+    '<div class="card"><h2>' + ic("database", 16) + " État de la sauvegarde automatique</h2>" +
+    '<p class="card-sub">Aucun bouton à cliquer : chaque import et chaque modification est écrit aussitôt dans le navigateur (localStorage pour les saisies, IndexedDB pour les semaines planning et les lignes brutes de joignabilité). Contenu actuel de votre base :</p>' +
+    '<div class="chips">' +
+    '<div class="chip"><b>' + store.data.entries.length + "</b>lignes Update_perf</div>" +
+    '<div class="chip"><b>' + store.data.fdr.length + "</b>lignes Config FDR</div>" +
+    '<div class="chip"><b id="stPlanning">…</b>semaines planning</div>' +
+    '<div class="chip"><b>' + nbSatcli + "</b>mois SATCLI saisis</div>" +
+    '<div class="chip"><b>' + joignTotal + "</b>appels joignabilité</div>" +
+    '<div class="chip"><b id="stJoignRaw">…</b>lignes brutes joignabilité</div>' +
+    "</div>" +
+    '<p class="note">Dernier enregistrement automatique : <b id="stSaved"></b> · Espace utilisé : <b id="stSize"></b></p></div>' +
+    syncCardHtml() +
+    '<div class="card"><h2>' + ic("download", 16) + " Exporter une sauvegarde</h2>" +
+    '<p class="card-sub">Le fichier de sauvegarde JSON contient <b>tout</b> : lignes Update_perf, Config FDR, DMT, SATCLI, joignabilité (agrégat et lignes brutes), semaines planning et activité sélectionnée. Conservez-le précieusement (clé USB, dossier daté...).</p>' +
     '<div class="form-actions">' +
     '<button type="button" class="btn btn-primary" id="expJson">' + ic("download", 16) + " Sauvegarde complète (JSON)</button>" +
     '<button type="button" class="btn btn-ghost" id="expCsvAll">' + ic("file", 16) + " Update_perf : toutes activités (CSV)</button>" +
     "</div></div>" +
     '<div class="card"><h2>' + ic("upload", 16) + " Importer une sauvegarde</h2>" +
-    '<p class="card-sub">Chargez un fichier de sauvegarde JSON exporté depuis cette application. Les données actuelles seront remplacées.</p>' +
+    '<p class="card-sub">Chargez un fichier de sauvegarde JSON exporté depuis cette application. Les données actuelles seront remplacées, y compris les semaines planning et les lignes brutes de joignabilité. Les anciennes sauvegardes (v2) restent acceptées.</p>' +
     '<div class="form-actions"><input type="file" id="impFile" accept=".json,application/json"></div></div>' +
     '<div class="card"><h2>' + ic("refresh", 16) + " Recharger les données d'origine</h2>" +
-    '<p class="card-sub">Restaure les données d\'origine : historique Update_perf (' + window.APP_HISTORY.length + " lignes) et config FDR. Vos modifications personnelles sont effacées. Pensez à exporter avant.</p>" +
+    '<p class="card-sub">Restaure les données d\'origine : historique Update_perf (' + window.APP_HISTORY.length + " lignes), config FDR, et efface aussi DMT, SATCLI, joignabilité et les semaines planning. Pensez à exporter avant.</p>" +
     '<div class="form-actions"><button type="button" class="btn btn-danger" id="resetBtn">' + ic("refresh", 16) + " Réinitialiser</button></div></div>" +
     '<div class="card"><h2>' + ic("trash", 16) + " Vider toutes les lignes Update_perf</h2>" +
     '<p class="card-sub">Supprime la totalité des lignes Update_perf, toutes activités confondues (' + store.data.entries.length + " lignes actuellement). Les référentiels FDR sont conservés et le tableau de bord se vide automatiquement. Pour repartir de zéro avant une nouvelle campagne. Pensez à exporter avant.</p>" +
     '<div class="form-actions"><button type="button" class="btn btn-danger" id="wipeBtn">' + ic("trash", 16) + " Vider toutes les lignes</button></div></div>" +
-    '<p class="note">Note technique : les données sont stockées via localStorage, propre à ce navigateur et à cet ordinateur. ' +
-    "Si vous ouvrez l'application depuis un autre ordinateur ou un autre navigateur, importez votre fichier de sauvegarde JSON pour retrouver vos données.</p>";
+    '<p class="note">Note technique : enregistrement automatique à chaque modification (localStorage + IndexedDB), propre à ce navigateur et à cet ordinateur. ' +
+    "Pour retrouver vos données sur un autre ordinateur ou un autre navigateur, exportez une sauvegarde complète puis importez-la : tout sera restauré, semaines planning et joignabilité comprises.</p>";
+
+  plAllWeeks().then(function (w) {
+    const el = $("#stPlanning"); if (el) el.textContent = w.length;
+  }).catch(function () { const el = $("#stPlanning"); if (el) el.textContent = "—"; });
+  idbCount().then(function (n) {
+    const el = $("#stJoignRaw"); if (el) el.textContent = n;
+  }).catch(function () { const el = $("#stJoignRaw"); if (el) el.textContent = "—"; });
+  const se = $("#stSaved");
+  if (se) se.textContent = savedAt ? savedAt.toLocaleString("fr-FR") : "à la première modification";
+  const sz = $("#stSize");
+  if (sz) {
+    if (navigator.storage && navigator.storage.estimate) {
+      navigator.storage.estimate().then(function (est) {
+        sz.textContent = est && est.usage ? (est.usage / 1048576).toFixed(1).replace(".", ",") + " Mo" : "non mesurable";
+      }).catch(function () { sz.textContent = "non mesurable"; });
+    } else {
+      sz.textContent = "non mesurable";
+    }
+  }
+  syncBindCard();
 
   $("#expJson").addEventListener("click", function () {
-    const payload = { app: "boite-outils-superviseur", version: 2, exported: new Date().toISOString(),
-      activityId: store.data.activityId, entries: store.data.entries, fdr: store.data.fdr };
-    downloadFile("sauvegarde_boite_outils_" + new Date().toISOString().slice(0, 10) + ".json",
-      JSON.stringify(payload), "application/json;charset=utf-8");
-    toast("Sauvegarde téléchargée.");
+    /* Sauvegarde VRAIMENT complète : on ajoute aux données localStorage les
+       deux magasins IndexedDB (semaines planning + lignes brutes joignabilité). */
+    Promise.all([plAllWeeks(), idbAllRows()]).then(function (res) {
+      const payload = { app: "boite-outils-superviseur", version: 3, exported: new Date().toISOString(),
+        activityId: store.data.activityId, entries: store.data.entries, fdr: store.data.fdr,
+        dmt: store.data.dmt, satcli: store.data.satcli, joign: store.data.joign,
+        planning: res[0], joignRaw: res[1] };
+      downloadFile("sauvegarde_boite_outils_" + new Date().toISOString().slice(0, 10) + ".json",
+        JSON.stringify(payload), "application/json;charset=utf-8");
+      toast("Sauvegarde complète téléchargée (planning et joignabilité inclus).");
+    }).catch(function () {
+      toast("Erreur : sauvegarde impossible (IndexedDB indisponible ?)");
+    });
   });
   $("#expCsvAll").addEventListener("click", function () {
     const rows = store.data.entries.map(function (e) { return e.row; });
@@ -2148,22 +2194,17 @@ function renderDonnees(root) {
         const d = JSON.parse(reader.result);
         if (!d || !Array.isArray(d.entries)) throw new Error("format");
         const entries = d.entries.filter(function (e) { return e && Array.isArray(e.row) && e.row.length === 54; });
-        if (!confirm("Remplacer les données actuelles par la sauvegarde (" + entries.length + " lignes) ?")) return;
-        store.data.entries = entries;
-        if (d.activityId) store.data.activityId = d.activityId;
-        if (Array.isArray(d.fdr)) {
-          const fdr = d.fdr.filter(function (r) { return r && r.fluxId && Array.isArray(r.v) && r.v.length === 8; });
-          if (fdr.length) store.data.fdr = fdr;
-        }
-        if (d.dmt) store.data.dmt = {
-          matricules: d.dmt.matricules || {},
-          agg: d.dmt.agg || {},
-          imports: Array.isArray(d.dmt.imports) ? d.dmt.imports : []
-        };
-        store.save();
-        store.recalcAll();
-        toast("Sauvegarde importée.");
-        navigate();
+        const plList = Array.isArray(d.planning) ? d.planning.filter(function (r) { return r && r.week; }) : null;
+        const rawList = Array.isArray(d.joignRaw) ? d.joignRaw.filter(Boolean) : null;
+        const extra = [];
+        if (plList) extra.push(plList.length + " semaines planning");
+        if (rawList) extra.push(rawList.length + " lignes de joignabilité");
+        if (!confirm("Remplacer les données actuelles par la sauvegarde (" + entries.length +
+          " lignes Update_perf" + (extra.length ? " + " + extra.join(" + ") : "") + ") ?")) return;
+        /* Restauration partagée avec « Récupérer depuis le serveur » (sync.js) :
+           localStorage + magasins IndexedDB. Les sauvegardes v2 (sans planning/
+           joignRaw) laissent les magasins actuels inchangés. */
+        syncApplyDump(d, "Sauvegarde importée : tout est restauré.");
       } catch (e) {
         toast("Fichier de sauvegarde invalide.");
       }
@@ -2171,11 +2212,16 @@ function renderDonnees(root) {
     reader.readAsText(file);
   });
   $("#resetBtn").addEventListener("click", function () {
-    if (confirm("Recharger les données d'origine ? Vos saisies personnelles seront effacées (pensez à exporter avant).")) {
+    if (confirm("Recharger les données d'origine ? Vos saisies personnelles seront effacées : lignes Update_perf, config FDR, DMT, SATCLI, joignabilité et semaines planning (pensez à exporter avant).")) {
       store.seed();
       store.save();
-      toast("Données d'origine rechargées.");
-      navigate();
+      Promise.all([idbClearStore("planning"), idbClear()]).then(function () {
+        toast("Données d'origine rechargées (planning et joignabilité compris).");
+        navigate();
+      }).catch(function () {
+        toast("Données d'origine rechargées (IndexedDB non vidé).");
+        navigate();
+      });
     }
   });
   $("#wipeBtn").addEventListener("click", function () {
@@ -2565,6 +2611,9 @@ function renderStychAlim(root) {
         "alimente la page <b>Planning</b> du menu « Mes heures ». Les autres alimentations " +
         "(appels Ringover DMT, « Demande de rappel » et SATCLI MTD) concernent le projet Stych.");
 
+  // Carte « dossier local lié » : import automatique des fichiers reconnus
+  html += fsCardHtml();
+
   // Carte import planning (toutes activités)
   html += '<div id="plImportBox"></div>';
 
@@ -2579,6 +2628,7 @@ function renderStychAlim(root) {
   root.innerHTML = html;
   plRenderImportBox();
   if (isStych) dmtBindAlimCards(root);
+  fsBindCard(root);
 }
 
 /* Cartes Stych de la page Alimentation DATA : import DMT (appels Ringover),
@@ -3121,7 +3171,8 @@ function joignStore() {
 /* ---------- IndexedDB : lignes brutes conservées ---------- */
 function idbOpen() {
   return new Promise(function (resolve, reject) {
-    const req = indexedDB.open("bo-sup", 2);
+    /* v3 : ajout du magasin « fslink » (dossier local lié, fslink.js) */
+    const req = indexedDB.open("bo-sup", 3);
     req.onupgradeneeded = function () {
       const db = req.result;
       if (!db.objectStoreNames.contains("rappel")) {
@@ -3129,6 +3180,9 @@ function idbOpen() {
       }
       if (!db.objectStoreNames.contains("planning")) {
         db.createObjectStore("planning", { keyPath: "week" });
+      }
+      if (!db.objectStoreNames.contains("fslink")) {
+        db.createObjectStore("fslink");
       }
     };
     req.onsuccess = function () { resolve(req.result); };
@@ -3142,6 +3196,16 @@ function idbTx(mode, store) {
 }
 function idbClear() {
   return idbTx("readwrite").then(function (st) {
+    return new Promise(function (resolve, reject) {
+      const rq = st.clear();
+      rq.onsuccess = function () { resolve(); };
+      rq.onerror = function () { reject(rq.error); };
+    });
+  });
+}
+/* Vide n'importe quel magasin de la base (ex : « planning »). */
+function idbClearStore(storeName) {
+  return idbTx("readwrite", storeName).then(function (st) {
     return new Promise(function (resolve, reject) {
       const rq = st.clear();
       rq.onsuccess = function () { resolve(); };
@@ -4926,6 +4990,7 @@ function plCollect(weeks) {
   const selWeeks = plSelected(plState.semaine, weekIds);
   const out = [];
   weeks.forEach(function (w) {
+    if (!w || !Array.isArray(w.agents)) return;       // fiche malformée ignorée
     if (selWeeks.indexOf(w.week) < 0) return;
     w.agents.forEach(function (a) {
       const aid = plProjOfName(a.p);
@@ -5187,7 +5252,7 @@ async function plRefreshBody() {
       html += (nWk > 1 ? "<td>" + esc(p.wk) + "</td>" : "") +
         "<td>" + esc(a.n) + (a.pay ? ' <span class="pl-d">' + esc(a.pay) + "</span>" : "") + "</td>" +
         '<td><span class="pl-fn">' + esc(a.bt || "—") + "</span></td>" +
-        '<td><span class="' + (a.st.indexOf("FIM") >= 0 ? "pl-st-fim" : "") + '">' + esc(a.st || "—") + "</span></td>";
+        '<td><span class="' + ((a.st || "").indexOf("FIM") >= 0 ? "pl-st-fim" : "") + '">' + esc(a.st || "—") + "</span></td>";
       showDays.forEach(function (d) {
         const dc = a.d[PL_DAYS.indexOf(d)];
         if (dc && dc.k === "work") tot += dc.net;
@@ -5245,6 +5310,434 @@ function plBindImport(scope) {
 }
 
 ROUTES["planning"] = renderPlanning;
+
+/* ============================================================
+   DOSSIER LOCAL LIÉ (File System Access API)
+   L'utilisateur lie une seule fois un dossier de son ordinateur ;
+   à chaque démarrage de l'outil, le dossier est scanné et les
+   fichiers reconnus sont réimportés automatiquement :
+   - « Validation Planning Sxx_aaaa »  -> import planning
+   - « Demande de rappel »             -> import joignabilité
+   - export Ringover (.csv)            -> import DMT / appels
+   Le navigateur interdit tout chemin d'accès en dur : l'accès
+   passe par une autorisation explicite, mémorisée par dossier.
+   Le handle du dossier est conservé en IndexedDB (base « bo-sup »,
+   magasin « fslink »). Chrome / Edge sur ordinateur uniquement ;
+   l'import manuel reste toujours possible ci-dessous.
+   ============================================================ */
+const FS_KEY = "link";
+/* Reconnaissance des fichiers par mots-clés du nom (sans accents, minuscules). */
+const FS_MATCHERS = [
+  { kind: "planning", label: "Planning",
+    test: function (n) { return n.indexOf("modification prod") >= 0 || n.indexOf("validation planning") >= 0; } },
+  { kind: "joign", label: "Joignabilité",
+    test: function (n) { return n.indexOf("demande de rappel") >= 0 || n.indexOf("joignab") >= 0; } },
+  { kind: "dmt", label: "Appels (DMT)",
+    test: function (n) { return n.indexOf("ringover") >= 0 || (n.indexOf("appel") >= 0 && /\.csv$/i.test(n)); } }
+];
+
+function fsSupported() {
+  return typeof window.showDirectoryPicker === "function";
+}
+function fsNormName(n) {
+  return plNorm(String(n || ""));
+}
+
+/* ---------- IndexedDB : magasin « fslink » (une fiche « link ») ---------- */
+function fsStoreTx(mode) {
+  return idbTx(mode, "fslink");
+}
+function fsGetLink() {
+  return fsStoreTx("readonly").then(function (st) {
+    return new Promise(function (resolve, reject) {
+      const rq = st.get(FS_KEY);
+      rq.onsuccess = function () { resolve(rq.result || null); };
+      rq.onerror = function () { reject(rq.error); };
+    });
+  }).catch(function () { return null; });
+}
+function fsSaveLink(rec) {
+  return fsStoreTx("readwrite").then(function (st) {
+    return new Promise(function (resolve, reject) {
+      st.put(rec, FS_KEY);          /* magasin sans keyPath : clé explicite */
+      st.transaction.oncomplete = function () { resolve(); };
+      st.transaction.onerror = function () { reject(st.transaction.error); };
+    });
+  });
+}
+function fsClearLink() {
+  return fsStoreTx("readwrite").then(function (st) {
+    return new Promise(function (resolve, reject) {
+      st.delete(FS_KEY);
+      st.transaction.oncomplete = function () { resolve(); };
+      st.transaction.onerror = function () { reject(st.transaction.error); };
+    });
+  });
+}
+/* Permission : « granted » (accès direct), « prompt » (il faut recliquer),
+   « denied », « unsupported » (hors Chrome/Edge). */
+function fsPermission(handle) {
+  if (!handle || typeof handle.queryPermission !== "function") return Promise.resolve("unsupported");
+  return handle.queryPermission({ mode: "read" }).catch(function () { return "denied"; });
+}
+
+/* ---------- Scan du dossier + imports via les fonctions existantes ---------- */
+async function fsScan(handle, rec) {
+  const report = { scanned: 0, imported: [], skipped: [], unknown: [], errors: [],
+    when: new Date().toISOString() };
+  rec.seen = rec.seen || {};
+  for await (const entry of handle.values()) {
+    if (!entry || entry.kind !== "file") continue;
+    if (entry.name && entry.name.charAt(0) === "~") continue;   // fichiers temporaires Office
+    report.scanned++;
+    const n = fsNormName(entry.name);
+    const m = FS_MATCHERS.find(function (x) { return x.test(n); });
+    if (!m) {
+      if (/\.(xls|xlsx|xlsb|xlsm|csv)$/i.test(entry.name) && report.unknown.length < 12) {
+        report.unknown.push(entry.name);                          // fichier de données non reconnu
+      }
+      continue;
+    }
+    let file;
+    try { file = await entry.getFile(); } catch (e) {
+      report.errors.push(entry.name + " : fichier indisponible (OneDrive « à la demande » ? faites « Toujours conserver sur cet appareil »)");
+      continue;
+    }
+    const sig = entry.name + "|" + (file.lastModified || 0);
+    if (rec.seen[sig]) { report.skipped.push(entry.name); continue; }
+    try {
+      if (m.kind === "dmt") {
+        const text = await file.text();
+        const r = dmtImportFile(text, entry.name);
+        if (r && r.ok === false) throw new Error(r.msg || "fichier non reconnu");
+      } else if (m.kind === "planning") {
+        await plImportFile(await file.arrayBuffer(), entry.name);
+      } else {
+        const r = await joignImportFile(await file.arrayBuffer(), entry.name);
+        if (r && r.ok === false) throw new Error(r.msg || "fichier non reconnu");
+      }
+      report.imported.push(entry.name + " — " + m.label);
+      rec.seen[sig] = true;
+    } catch (e) {
+      report.errors.push(entry.name + " : " + (e && e.message ? e.message : "lecture impossible"));
+    }
+  }
+  rec.lastScan = report.when;
+  rec.report = report;
+  await fsSaveLink(rec);
+  return report;
+}
+
+/* Résumé HTML du dernier scan (affiché dans la carte). */
+function fsReportHtml(rep) {
+  if (!rep) return "";
+  let h = "";
+  if (rep.imported.length) {
+    h += '<div class="dmt-report"><b>Fichiers importés automatiquement</b><ul>' +
+      rep.imported.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul></div>";
+  }
+  if (rep.errors.length) {
+    h += '<div class="dmt-report" style="border-left-color:#c0392b"><b>Erreurs</b><ul>' +
+      rep.errors.map(function (s) { return "<li>" + esc(s) + "</li>"; }).join("") + "</ul></div>";
+  }
+  const notes = [];
+  if (rep.skipped.length) notes.push(rep.skipped.length + " fichier(s) déjà à jour (inchangé(s) depuis le dernier scan)");
+  if (rep.unknown.length) notes.push("non reconnus : " + rep.unknown.slice(0, 4).join(", ") +
+    (rep.unknown.length > 4 ? "…" : ""));
+  if (notes.length) h += '<p class="note">' + esc(notes.join(" · ")) + "</p>";
+  return h;
+}
+
+/* ---------- Carte dans Alimentation DATA ---------- */
+function fsCardHtml() {
+  let inner;
+  if (!fsSupported()) {
+    inner = '<p class="card-sub">La liaison de dossier nécessite <b>Chrome ou Edge sur ordinateur</b> ' +
+      "(elle n'est pas disponible sur ce navigateur). L'import manuel reste possible ci-dessous.</p>";
+  } else {
+    inner = '<p id="fsStatus" class="card-sub">Chargement…</p><div id="fsReport"></div>' +
+      '<div class="form-actions">' +
+      '<button type="button" class="btn btn-primary" id="fsLinkBtn">' + ic("upload", 16) + " Lier un dossier local</button>" +
+      '<button type="button" class="btn btn-ghost" id="fsScanBtn" style="display:none">' + ic("refresh", 16) + " Scanner maintenant</button>" +
+      '<button type="button" class="btn btn-danger" id="fsUnlinkBtn" style="display:none">' + ic("x", 16) + " Dissocier</button>" +
+      "</div>";
+  }
+  return '<div class="card" id="fsCard"><h2>' + ic("upload", 16) + " Dossier local lié (import automatique)</h2>" + inner +
+    '<p class="note">Liez une seule fois votre dossier de bases (ex. « The NEST ») : à chaque démarrage, l\'outil le scanne et importe automatiquement les fichiers reconnus — « Validation Planning », « Demande de rappel », export Ringover. Chrome/Edge mémorisent l\'autorisation (choisissez « Autoriser à chaque visite ») ; sinon un clic suffit. Les fichiers OneDrive doivent être physiquement sur le disque : clic droit → « Toujours conserver sur cet appareil ».</p></div>';
+}
+
+async function fsRefreshCard() {
+  const el = $("#fsStatus");
+  if (!el) return;
+  const rec = await fsGetLink();
+  const btnLink = $("#fsLinkBtn"), btnScan = $("#fsScanBtn"), btnUnlink = $("#fsUnlinkBtn"), repEl = $("#fsReport");
+  if (!rec || !rec.handle) {
+    el.innerHTML = "Aucun dossier lié pour le moment. Cliquez sur <b>Lier un dossier local</b> et choisissez votre dossier de bases.";
+    if (btnScan) btnScan.style.display = "none";
+    if (btnUnlink) btnUnlink.style.display = "none";
+    if (repEl) repEl.innerHTML = "";
+    return;
+  }
+  const perm = await fsPermission(rec.handle);
+  const last = rec.lastScan ? new Date(rec.lastScan).toLocaleString("fr-FR") : null;
+  let status = "<b>Dossier lié : " + esc(rec.name) + "</b>";
+  if (last) status += " · dernier scan : " + esc(last);
+  if (perm === "granted") {
+    status += " · accès actif — le scan se fera automatiquement au démarrage.";
+    if (btnScan) btnScan.style.display = "";
+  } else if (perm === "prompt" || perm === "denied") {
+    status += " · accès à réactiver : cliquez sur <b>Lier un dossier local</b> puis revalidez le même dossier (le navigateur redemande l'autorisation à chaque session sauf si « Autoriser à chaque visite » a été choisi).";
+    if (btnScan) btnScan.style.display = "none";
+  } else {
+    status += " · accès non vérifiable ici.";
+  }
+  el.innerHTML = status;
+  if (btnUnlink) btnUnlink.style.display = "";
+  if (repEl) repEl.innerHTML = fsReportHtml(rec.report);
+}
+
+/* Choix du dossier : gère le premier lien ET la réactivation d'accès. */
+async function fsPickAndScan() {
+  if (!fsSupported()) return;
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker({ mode: "read" });
+  } catch (e) {
+    return;                                        // annulation utilisateur
+  }
+  const rec = (await fsGetLink()) || { key: FS_KEY, name: handle.name, handle: handle, seen: {} };
+  rec.name = handle.name;
+  rec.handle = handle;
+  await fsSaveLink(rec);
+  toast("Dossier « " + handle.name + " » lié — scan en cours…");
+  const rep = await fsScan(handle, rec).catch(function () { return null; });
+  await fsRefreshCard();
+  if (rep && rep.imported.length) {
+    toast(rep.imported.length + " fichier(s) importé(s) depuis « " + handle.name + " »");
+    navigate();                                    // rafraîchit la page courante avec les nouvelles données
+  }
+}
+
+function fsBindCard(root) {
+  if (!fsSupported()) return;
+  const btnLink = $("#fsLinkBtn"), btnScan = $("#fsScanBtn"), btnUnlink = $("#fsUnlinkBtn");
+  if (btnLink) btnLink.addEventListener("click", fsPickAndScan);
+  if (btnScan) btnScan.addEventListener("click", async function () {
+    const rec = await fsGetLink();
+    if (!rec || !rec.handle) return;
+    const perm = await fsPermission(rec.handle);
+    if (perm !== "granted" && typeof rec.handle.requestPermission === "function") {
+      const p = await rec.handle.requestPermission({ mode: "read" }).catch(function () { return "denied"; });
+      if (p !== "granted") { toast("Accès au dossier refusé."); return; }
+    }
+    toast("Scan de « " + rec.name + " »…");
+    const rep = await fsScan(rec.handle, rec).catch(function () { return null; });
+    await fsRefreshCard();
+    if (rep && rep.imported.length) { toast(rep.imported.length + " fichier(s) importé(s)"); navigate(); }
+    else if (rep) { toast("Rien de nouveau : fichiers déjà à jour."); }
+  });
+  if (btnUnlink) btnUnlink.addEventListener("click", async function () {
+    if (!confirm("Dissocier le dossier local ? Les données déjà importées restent conservées dans l'outil.")) return;
+    await fsClearLink();
+    await fsRefreshCard();
+    toast("Dossier dissocié.");
+  });
+  fsRefreshCard();
+}
+
+/* Scan automatique au démarrage (si l'accès a été accordé durablement). */
+async function fsAutoScan() {
+  if (!fsSupported()) return;
+  try {
+    const rec = await fsGetLink();
+    if (!rec || !rec.handle) return;
+    const perm = await fsPermission(rec.handle);
+    if (perm !== "granted") return;
+    const rep = await fsScan(rec.handle, rec);
+    if (rep && rep.imported.length) {
+      toast("Dossier « " + rec.name + " » : " + rep.imported.length + " fichier(s) importé(s) automatiquement");
+      navigate();
+    }
+  } catch (e) { /* silencieux : le scan auto ne doit jamais bloquer le démarrage */ }
+}
+
+/* ============================================================
+   BASE CENTRALE CLOUDFLARE D1 (fonction Pages /api)
+   Synchronisation facultative : tant que le backend n'est pas
+   déployé (guide DEPLOY-D1.md), la carte reste sur « non
+   installée » et l'outil fonctionne comme d'habitude en local.
+   Quand elle est déployée : « Envoyer » pousse la base complète
+   du navigateur vers D1, « Récupérer » remplace la base locale
+   par celle du serveur — tout le monde voit alors les mêmes
+   chiffres, depuis n'importe quel appareil.
+   ============================================================ */
+function syncApiKey() {
+  try { return localStorage.getItem("bo_api_key") || ""; } catch (e) { return ""; }
+}
+function syncHeaders() {
+  const h = { "Content-Type": "application/json;charset=utf-8" };
+  const k = syncApiKey();
+  if (k) h["X-App-Key"] = k;
+  return h;
+}
+/* Détection : renvoie { ok:true, counts... } si la fonction /api répond, sinon { ok:false }. */
+async function syncState() {
+  try {
+    const r = await fetch("/api/state", { headers: syncHeaders() });
+    const ct = r.headers.get("content-type") || "";
+    if (!r.ok || ct.indexOf("application/json") < 0) return { ok: false, status: r.status };
+    const j = await r.json();
+    return Object.assign({ ok: true }, j);
+  } catch (e) {
+    return { ok: false, status: 0 };
+  }
+}
+/* Charge utile d'envoi : même contenu que la sauvegarde JSON v3 (tout, IDB compris). */
+async function syncBuildPayload() {
+  const res = await Promise.all([plAllWeeks(), idbAllRows()]);
+  return {
+    app: "boite-outils-superviseur", version: 3, exported: new Date().toISOString(),
+    activityId: store.data.activityId, entries: store.data.entries, fdr: store.data.fdr,
+    dmt: store.data.dmt, satcli: store.data.satcli, joign: store.data.joign,
+    planning: res[0], joignRaw: res[1]
+  };
+}
+async function syncPush() {
+  const payload = await syncBuildPayload();
+  const r = await fetch("/api/push", { method: "POST", headers: syncHeaders(), body: JSON.stringify(payload) });
+  const j = await r.json().catch(function () { return { ok: false, error: "réponse illisible" }; });
+  return j;
+}
+async function syncPull() {
+  const r = await fetch("/api/pull", { headers: syncHeaders() });
+  const ct = r.headers.get("content-type") || "";
+  if (!r.ok || ct.indexOf("application/json") < 0) return { ok: false, error: "serveur indisponible" };
+  return r.json();
+}
+
+/* Restauration d'une base complète (sauvegarde JSON v3, réponse /api/pull) :
+   localStorage + les deux magasins IndexedDB. Utilisée par l'import de
+   sauvegarde ET par « Récupérer depuis le serveur ». */
+function syncApplyDump(d, doneMsg) {
+  if (!d || !Array.isArray(d.entries)) {
+    toast("Données invalides.");
+    return Promise.resolve(false);
+  }
+  const entries = d.entries.filter(function (e) { return e && Array.isArray(e.row) && e.row.length === 54; });
+  const plList = Array.isArray(d.planning) ? d.planning.filter(function (r) { return r && r.week; }) : null;
+  const rawList = Array.isArray(d.joignRaw) ? d.joignRaw.filter(Boolean) : null;
+  store.data.entries = entries;
+  if (d.activityId) store.data.activityId = d.activityId;
+  if (Array.isArray(d.fdr)) {
+    const fdr = d.fdr.filter(function (r) { return r && r.fluxId && Array.isArray(r.v) && r.v.length === 8; });
+    if (fdr.length) store.data.fdr = fdr;
+  }
+  if (d.dmt) store.data.dmt = {
+    matricules: d.dmt.matricules || {},
+    agg: d.dmt.agg || {},
+    imports: Array.isArray(d.dmt.imports) ? d.dmt.imports : []
+  };
+  if (d.satcli && d.satcli.vals) store.data.satcli = { vals: d.satcli.vals, dates: d.satcli.dates || {} };
+  if (d.joign && d.joign.agg) store.data.joign = {
+    agg: d.joign.agg,
+    imports: Array.isArray(d.joign.imports) ? d.joign.imports : [],
+    total: d.joign.total || 0
+  };
+  store.save();
+  store.recalcAll();
+  const idbJobs = [];
+  if (plList) {
+    idbJobs.push(idbClearStore("planning").then(function () {
+      return Promise.all(plList.map(function (rec) { return plPutWeek(rec); }));
+    }));
+  }
+  if (rawList) idbJobs.push(idbClear().then(function () { return idbPutRows(rawList); }));
+  return Promise.all(idbJobs).then(function () {
+    toast(doneMsg);
+    navigate();
+    return true;
+  }).catch(function () {
+    toast("Données principales restaurées (IndexedDB indisponible).");
+    navigate();
+    return true;
+  });
+}
+
+/* ---------- Carte « Base centrale » dans Données & sauvegarde ---------- */
+function syncCardHtml() {
+  return '<div class="card" id="syncCard"><h2>' + ic("database", 16) + " Base centrale (partage équipe)</h2>" +
+    '<p id="syncStatus" class="card-sub">Détection de la base centrale…</p>' +
+    '<div id="syncActions" style="display:none">' +
+    '<p class="note" id="syncInfo"></p>' +
+    '<div class="form-actions">' +
+    '<button type="button" class="btn btn-primary" id="syncPushBtn">' + ic("upload", 16) + " Envoyer ma base vers le serveur</button>" +
+    '<button type="button" class="btn btn-ghost" id="syncPullBtn">' + ic("download", 16) + " Récupérer depuis le serveur</button>" +
+    '<button type="button" class="btn btn-ghost" id="syncTestBtn">' + ic("refresh", 16) + " Tester</button>" +
+    "</div>" +
+    '<div class="form-actions"><label style="font-size:0.85rem">Clé d\'accès (si activée côté serveur) : ' +
+    '<input type="password" id="syncKeyInput" style="max-width:220px" placeholder="vide = aucune"></label></div></div></div>';
+}
+async function syncRefreshCard() {
+  const el = $("#syncStatus");
+  if (!el) return;
+  const st = await syncState();
+  const actions = $("#syncActions");
+  const ki = $("#syncKeyInput");
+  if (ki) ki.value = syncApiKey();
+  if (!st.ok) {
+    el.innerHTML = "<b>Non installée sur ce site.</b> La synchronisation d'équipe nécessite une petite base de données " +
+      "hébergée avec le site (Cloudflare D1). Tant qu'elle n'est pas déployée, l'outil fonctionne normalement : " +
+      "vos données restent enregistrées dans ce navigateur et la sauvegarde JSON reste votre filet de sécurité. " +
+      "Pour l'activer, suivez le guide <b>DEPLOY-D1.md</b> livré avec l'application (comptez 10 minutes).";
+    if (actions) actions.style.display = "none";
+    return;
+  }
+  el.innerHTML = "<b>Connectée.</b> Envoyez votre base après chaque mise à jour importante ; l'équipe la récupère ensuite ici, " +
+    "sur n'importe quel appareil — même avec le PC du bureau éteint.";
+  if (actions) actions.style.display = "";
+  const info = $("#syncInfo");
+  if (info) {
+    info.textContent = "Contenu du serveur : " + (st.entries || 0) + " lignes Update_perf, " + (st.weeks || 0) +
+      " semaines planning, " + (st.joign || 0) + " lignes joignabilité, " + (st.scopes || 0) + " référentiels" +
+      (st.updated ? " · dernière mise à jour : " + new Date(st.updated).toLocaleString("fr-FR") : " · serveur vide") + ".";
+  }
+}
+function syncBindCard() {
+  const pushBtn = $("#syncPushBtn"), pullBtn = $("#syncPullBtn"), testBtn = $("#syncTestBtn"),
+    ki = $("#syncKeyInput");
+  if (ki) ki.addEventListener("change", function () {
+    try {
+      if (ki.value) localStorage.setItem("bo_api_key", ki.value);
+      else localStorage.removeItem("bo_api_key");
+    } catch (e) { /* stockage indisponible */ }
+    toast(ki.value ? "Clé d'accès enregistrée." : "Clé d'accès effacée.");
+  });
+  if (testBtn) testBtn.addEventListener("click", function () { toast("Test en cours…"); syncRefreshCard(); });
+  if (pushBtn) pushBtn.addEventListener("click", async function () {
+    if (!confirm("Envoyer TOUTE votre base locale vers le serveur ? Le contenu actuel du serveur sera remplacé. " +
+      "Pensez à d'abord importer ici les derniers fichiers (import manuel ou dossier lié).")) return;
+    toast("Envoi en cours…");
+    const j = await syncPush().catch(function () { return { ok: false, error: "serveur indisponible" }; });
+    if (j && j.ok) {
+      toast("Base envoyée : " + j.entries + " lignes, " + j.weeks + " semaines, " + j.joign + " lignes joignabilité.");
+      syncRefreshCard();
+    } else {
+      toast("Échec de l'envoi : " + ((j && j.error) || "erreur serveur") + (j && j.error === "unauthorized" ? " — vérifiez la clé d'accès." : ""));
+    }
+  });
+  if (pullBtn) pullBtn.addEventListener("click", async function () {
+    if (!confirm("Remplacer les données de CE navigateur par le contenu du serveur ? Exportez une sauvegarde avant si vous avez des données locales récentes non envoyées.")) return;
+    toast("Récupération en cours…");
+    const d = await syncPull().catch(function () { return { ok: false, error: "serveur indisponible" }; });
+    if (d && d.ok && d.dump) {
+      await syncApplyDump(d.dump, "Base centrale récupérée : tout est restauré.");
+    } else {
+      toast("Échec de la récupération : " + ((d && d.error) || "serveur vide ou indisponible") +
+        (d && d.error === "unauthorized" ? " — vérifiez la clé d'accès." : ""));
+    }
+  });
+  syncRefreshCard();
+}
 
 </script>
 </body>
