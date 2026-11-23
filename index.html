@@ -1269,6 +1269,7 @@ function boot() {
   window.addEventListener("hashchange", navigate);
   navigate();
   fsAutoScan();                 /* scan du dossier lié au démarrage (silencieux si rien de nouveau) */
+  syncAutoPull();               /* base centrale : récupération auto si ce navigateur est vide */
 }
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", boot);
@@ -5587,6 +5588,7 @@ async function syncState() {
     const ct = r.headers.get("content-type") || "";
     if (!r.ok || ct.indexOf("application/json") < 0) return { ok: false, status: r.status };
     const j = await r.json();
+    if (j.ok === false) return { ok: false, status: r.status, error: j.error || "erreur serveur" };
     return Object.assign({ ok: true }, j);
   } catch (e) {
     return { ok: false, status: 0 };
@@ -5674,7 +5676,7 @@ function syncCardHtml() {
     '<button type="button" class="btn btn-ghost" id="syncPullBtn">' + ic("download", 16) + " Récupérer depuis le serveur</button>" +
     '<button type="button" class="btn btn-ghost" id="syncTestBtn">' + ic("refresh", 16) + " Tester</button>" +
     "</div>" +
-    '<div class="form-actions"><label style="font-size:0.85rem">Clé d\'accès (si activée côté serveur) : ' +
+    '<div class="form-actions"><label style="font-size:0.85rem">Mot de passe (APP_KEY définie dans Cloudflare, si activée) : ' +
     '<input type="password" id="syncKeyInput" style="max-width:220px" placeholder="vide = aucune"></label></div></div></div>';
 }
 async function syncRefreshCard() {
@@ -5685,15 +5687,25 @@ async function syncRefreshCard() {
   const ki = $("#syncKeyInput");
   if (ki) ki.value = syncApiKey();
   if (!st.ok) {
+    if (st.error && st.error.indexOf("D1") >= 0) {
+      el.innerHTML = "<b>Presque installée.</b> L'API répond, mais la base de données D1 n'est pas encore reliée au site. " +
+        "Dans Cloudflare : Workers & Pages → toolbox-bv0 → Settings → Bindings → ajoutez une liaison D1 nommée exactement " +
+        "<b>DB</b> (choisissez la base créée via le guide), puis créez un nouveau déploiement pour l'activer. " +
+        "Détails pas à pas : guide <b>DEPLOY-D1.md</b>, étapes 3 et 5.";
+      if (actions) actions.style.display = "none";
+      return;
+    }
     el.innerHTML = "<b>Non installée sur ce site.</b> La synchronisation d'équipe nécessite une petite base de données " +
-      "hébergée avec le site (Cloudflare D1). Tant qu'elle n'est pas déployée, l'outil fonctionne normalement : " +
+      "hébergée avec le site (Cloudflare D1). Tant qu'elle n'est pas installée, l'outil fonctionne normalement : " +
       "vos données restent enregistrées dans ce navigateur et la sauvegarde JSON reste votre filet de sécurité. " +
-      "Pour l'activer, suivez le guide <b>DEPLOY-D1.md</b> livré avec l'application (comptez 10 minutes).";
+      "Pour l'activer sans installer de logiciel ni utiliser GitHub, suivez le guide <b>DEPLOY-D1.md</b> livré avec " +
+      "l'application (comptez 10 minutes) : attention, le déploiement doit inclure les DEUX fichiers index.html et _worker.js.";
     if (actions) actions.style.display = "none";
     return;
   }
   el.innerHTML = "<b>Connectée.</b> Envoyez votre base après chaque mise à jour importante ; l'équipe la récupère ensuite ici, " +
-    "sur n'importe quel appareil — même avec le PC du bureau éteint.";
+    "sur n'importe quel appareil — même avec le PC du bureau éteint. Un navigateur qui se connecte pour la première fois " +
+    "(vide) récupère automatiquement la base au démarrage.";
   if (actions) actions.style.display = "";
   const info = $("#syncInfo");
   if (info) {
@@ -5737,6 +5749,21 @@ function syncBindCard() {
     }
   });
   syncRefreshCard();
+}
+
+/* Récupération automatique au démarrage : uniquement quand ce navigateur est
+   vide (premier accès d'un collègue, nouvel appareil) et que le serveur
+   contient des données — pour ne jamais écraser un travail local existant. */
+async function syncAutoPull() {
+  try {
+    const st = await syncState();
+    if (!st.ok || !st.entries) return;
+    if (store.data.entries.length) return;
+    const d = await syncPull();
+    if (d && d.ok && d.dump) {
+      await syncApplyDump(d.dump, "Base centrale récupérée automatiquement (" + d.dump.entries.length + " lignes).");
+    }
+  } catch (e) { /* silencieux : ne doit jamais bloquer le démarrage */ }
 }
 
 </script>
